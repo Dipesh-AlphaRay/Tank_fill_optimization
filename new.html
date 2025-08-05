@@ -1,0 +1,361 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Tank Facility Mapper</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <style>
+    body { display: flex; margin: 0; }
+    #map { width: 70vw; height: 100vh; }
+    #sidePanel { width: 30vw; padding: 10px; background: #f4f4f4; overflow-y: auto; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid #999; padding: 6px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <!-- editted line -->
+  <button id="toggleCircle" onclick="toggleCircleMode()" style="position: absolute; top: 10px; left: 10px; z-index: 1000; padding: 8px 14px;">🔵 Draw Circles</button>
+
+  <div id="sidePanel"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+  <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+
+  <script>
+    var map = L.map('map').setView([29.76, -95.36], 17);
+    L.tileLayer('https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
+      maxZoom: 20,
+      subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
+    }).addTo(map);
+
+    L.Control.geocoder({ defaultMarkGeocode: true }).addTo(map);
+
+    var drawnItems = new L.FeatureGroup();
+    map.addLayer(drawnItems);
+
+    var drawControl = new L.Control.Draw({
+      draw: {
+        polygon: { allowIntersection: false, showArea: true },
+        polyline: false,
+        rectangle: false,
+        circle: { shapeOptions: { color: 'red' } },
+        marker: true,
+        circlemarker: false
+      },
+      edit: { featureGroup: drawnItems, remove: true }
+    });
+    map.addControl(drawControl);
+
+    var currentPolygon = null;
+    var tankCounter = 1;
+
+    map.on(L.Draw.Event.CREATED, function (event) {
+      var layer = event.layer;
+      if (event.layerType === 'polygon') {
+        drawnItems.clearLayers();
+        drawnItems.addLayer(layer);
+        currentPolygon = layer;
+        appState.tanks = [];
+        tankCounter = 1;
+        updateTankTable();
+      } else if ((event.layerType === 'circle' || event.layerType === 'marker')) {
+        var latlng = layer.getLatLng();
+
+        if (!currentPolygon || leafletPip.pointInLayer([latlng.lng, latlng.lat], currentPolygon).length > 0) {
+          drawnItems.addLayer(layer);
+          var diameter = event.layerType === 'circle' ? (2 * layer.getRadius()).toFixed(2) : '';
+          var label = L.marker(latlng, {
+            icon: L.divIcon({ className: 'tank-label', html: `<b style='color:white;background:#0078A8;padding:4px;border-radius:4px;'>Tank ${tankCounter}</b>` })
+          }).addTo(map);
+          layer._label = label;
+          layer._latlng = latlng;
+          appState.tanks.push({
+            id: tankCounter,
+            diameter: diameter,
+            height: '',
+            density: '',
+            fill: '',
+            lat: latlng.lat,
+            lng: latlng.lng
+          });
+          tankCounter++;
+          updateTankTable();
+
+          // Keep drawing mode active for circles
+          if (event.layerType === 'circle') {
+            drawControl._toolbars.draw._modes.circle.handler.enable();
+          }
+        }
+      }
+    });
+
+
+    map.on('draw:deleted', function (e) {
+      e.layers.eachLayer(function(layer) {
+        if (layer._latlng) {
+          const idx = appState.tanks.findIndex(t => t.lat === layer._latlng.lat && t.lng === layer._latlng.lng);
+          if (idx > -1) appState.tanks.splice(idx, 1);
+        }
+        if (layer._label) map.removeLayer(layer._label);
+      });
+      tankCounter = appState.tanks.length + 1;
+      updateTankTable();
+    });
+
+    function updateTankTable() {
+      let html = '<table><tr><th>Tank #</th><th>Diameter</th><th>Height</th><th>Sp_Gravity</th><th>Fill Level</th><th>Delete</th></tr>';
+      appState.tanks.forEach((t, i) => {
+        html += `<tr>
+          <td>${t.id}</td>
+          <td contenteditable oninput="appState.tanks[${i}].diameter=this.innerText">${t.diameter}</td>
+          <td contenteditable oninput="appState.tanks[${i}].height=this.innerText">${t.height}</td>
+          <td contenteditable oninput="appState.tanks[${i}].density=this.innerText">${t.density}</td>
+          <td contenteditable oninput="appState.tanks[${i}].fill=this.innerText">${t.fill}</td>
+          <td><button onclick="deleteTank(${i})">Delete</button></td>
+        </tr>`;
+      });
+      html += '</table>';
+      document.getElementById('tankTable').innerHTML = html;
+      updateConnectivityTable();
+    }
+
+    function updateConnectivityTable() {
+      appState.connectivityMatrix = [];
+      let html = '<h3>Tank Connectivity Table</h3>';
+      if (appState.tanks.length === 0) {
+        html += '<p>No tanks available.</p>';
+      } else {
+        html += '<table><tr><th></th>';
+        appState.tanks.forEach((t, colIdx) => { html += `<th>Tank ${t.id}</th>`; });
+        html += '</tr>';
+        appState.tanks.forEach((tRow, rowIdx) => {
+          html += `<tr><th>Tank ${tRow.id}</th>`;
+          let row = [];
+          appState.tanks.forEach((tCol, colIdx) => {
+            html += `<td contenteditable oninput="updateMatrix(${rowIdx}, ${colIdx}, this.innerText)"></td>`;
+            row.push("");
+          });
+          appState.connectivityMatrix.push(row);
+          html += '</tr>';
+        });
+        html += '</table>';
+      }
+      document.getElementById('connectivityTable').innerHTML = html;
+    }
+
+    function updateMatrix(i, j, value) {
+      if (!appState.connectivityMatrix[i]) appState.connectivityMatrix[i] = [];
+      appState.connectivityMatrix[i][j] = value;
+    }
+
+    function deleteTank(index) {
+      const { lat, lng } = appState.tanks[index];
+      drawnItems.eachLayer(layer => {
+        if (layer._latlng?.lat === lat && layer._latlng?.lng === lng) {
+          if (layer._label) map.removeLayer(layer._label);
+          drawnItems.removeLayer(layer);
+        }
+      });
+      appState.tanks.splice(index, 1);
+      tankCounter = appState.tanks.length + 1;
+      updateTankTable();
+    }
+
+    var leafletPip = {
+      pointInLayer: function(point, layer) {
+        var poly = layer.toGeoJSON();
+        var inside = false;
+        var x = point[0], y = point[1];
+        poly.geometry.coordinates[0].forEach(function(p, i, arr) {
+          var xi = p[0], yi = p[1];
+          var xj = arr[(i + 1) % arr.length][0], yj = arr[(i + 1) % arr.length][1];
+          var intersect = ((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / ((yj - yi) + 0.00001) + xi);
+          if (intersect) inside = !inside;
+        });
+        return inside ? [layer] : [];
+      }
+    };
+
+    let appState = {
+      tanks: [],
+      connectivityMatrix: [],
+      floodData: { floodHeight: '', waveVelocity: '', timePeriod: '', waveHeight: '', windSpeed: '' },
+      outputResult: null
+    };
+
+    function renderTankPanel() {
+      const panel = document.getElementById("sidePanel");
+      panel.innerHTML = `
+        <h3>Tank Table</h3>
+        <div id="tankTable"></div>
+        <div id="connectivityTable" style="padding-top:20px;"></div>
+        <div style="margin-top: 30px; text-align: center;">
+          <button onclick="renderFloodPanel()" style="padding: 10px 20px;">Next ➡️</button>
+        </div>
+      `;
+      updateTankTable();
+    }
+
+    function updateMatrix(i, j, value) {
+  if (!appState.connectivityMatrix[i]) appState.connectivityMatrix[i] = [];
+  appState.connectivityMatrix[i][j] = value;
+}
+
+
+    function renderFloodPanel() {
+      const f = appState.floodData;
+      document.getElementById("sidePanel").innerHTML = `
+        <h3>Environmental Loading Inputs</h3>
+        <table>
+          <tr><th>Parameter</th><th>Value</th></tr>
+          <tr><td>Flood Height (m)</td><td contenteditable oninput="appState.floodData.floodHeight=this.innerText">${f.floodHeight}</td></tr>
+          <tr><td>Wave Velocity (m/s)</td><td contenteditable oninput="appState.floodData.waveVelocity=this.innerText">${f.waveVelocity}</td></tr>
+          <tr><td>Time Period (s)</td><td contenteditable oninput="appState.floodData.timePeriod=this.innerText">${f.timePeriod}</td></tr>
+          <tr><td>Significant Wave Height (m)</td><td contenteditable oninput="appState.floodData.waveHeight=this.innerText">${f.waveHeight}</td></tr>
+          <tr><td>Wind Speed (m/s)</td><td contenteditable oninput="appState.floodData.windSpeed=this.innerText">${f.windSpeed}</td></tr>
+        </table>
+        <div style="margin-top: 30px; text-align: center;">
+          <button onclick="renderTankPanel()">⬅️ Back</button>
+          <button onclick="submitAndGeneratePDF()" style="margin-left: 10px;">Submit</button>
+        </div>
+      `;
+    }
+
+    async function submitAndGeneratePDF() {
+      const tanks = appState.tanks.map(t => ({
+        id: t.id,
+        diameter: parseFloat(t.diameter),
+        height: parseFloat(t.height),
+        density: parseFloat(t.density)
+      })).filter(t => !isNaN(t.diameter) && !isNaN(t.height) && !isNaN(t.density));
+
+      const windSpeed = parseFloat(appState.floodData.windSpeed);
+      const floodHeight = parseFloat(appState.floodData.floodHeight);
+      const waveVelocity = parseFloat(appState.floodData.waveVelocity);
+      const waveHeight = parseFloat(appState.floodData.waveHeight);
+      const timePeriod = parseFloat(appState.floodData.timePeriod);
+
+      const payload = {
+        tanks: tanks,
+        environment: {
+          "Wind Speed (m/s)": windSpeed,
+          "Flood Height (m)": floodHeight
+        }
+      };
+
+
+      try {
+        const response = await fetch('http://127.0.0.1:5000/api/calculate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        const result = await response.json();
+        if (result.error) throw new Error(result.error);
+
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF();
+        doc.setFontSize(14);
+        doc.text("Tank Facility Analysis Report", 20, 20);
+
+        doc.setFontSize(12);
+        let yOffset = 30;
+
+        // Environmental Inputs
+        doc.text("Environmental Inputs:", 20, yOffset);
+        yOffset += 7;
+        doc.text(`Wind Speed (V): ${appState.floodData.windSpeed} m/s`, 20, yOffset);
+        yOffset += 7;
+        doc.text(`Flood Height (h_f): ${appState.floodData.floodHeight} m`, 20, yOffset);
+        yOffset += 7;
+        doc.text(`Wave Velocity: ${appState.floodData.waveVelocity} m/s`, 20, yOffset);
+        yOffset += 7;
+        doc.text(`Wave Height: ${appState.floodData.waveHeight} m`, 20, yOffset);
+        yOffset += 7;
+        doc.text(`Time Period: ${appState.floodData.timePeriod} s`, 20, yOffset);
+
+        yOffset += 10;  // Extra space before next section
+
+        // Tank Computations
+        doc.setFontSize(12);
+        doc.text("Tank Computations:", 20, yOffset);
+        yOffset += 8;
+
+        result.results.forEach((r) => {
+          doc.text(`Tank ${r["Tank ID"]}:`, 20, yOffset);
+          yOffset += 7;
+          doc.text(`Min Fill (Sliding): ${r["Min. fill required to prevent sliding failure"].toFixed(3)} ft`, 25, yOffset);
+          yOffset += 7;
+          doc.text(`Min Fill (Floatation): ${r["Min. fill required to prevent floatation failure"].toFixed(3)} ft`, 25, yOffset);
+          yOffset += 7;
+          doc.text(`Min Fill (Overturning): ${r["Min. fill required to prevent overturning failure"].toFixed(3)} ft`, 25, yOffset);
+          yOffset += 10; // extra space between tanks
+        });
+
+
+
+        const pdfDataUrl = doc.output('dataurlstring');
+        renderPDFPanel(pdfDataUrl);
+
+      } catch (err) {
+        alert("Error communicating with backend: " + err.message);
+        console.error(err);
+      }
+    }
+    function renderPDFPanel(pdfDataUrl) {
+      document.getElementById("sidePanel").innerHTML = `
+        <h3>📄 PDF Output</h3>
+        <iframe src="${pdfDataUrl}" width="100%" height="500px"></iframe>
+        <div style="margin-top: 20px; text-align:center;">
+          <a href="${pdfDataUrl}" download="report.pdf">
+            <button style="padding: 10px 20px;">Download PDF</button>
+          </a>
+        </div>
+        <div style="margin-top: 20px; text-align: center;">
+          <button onclick="renderTankPanel()">🔁 Back to Tanks</button>
+          <button onclick="renderFloodPanel()" style="margin-left: 10px;">🌊 Edit Flood Data</button>
+        </div>
+      `;
+    }
+
+    let circleDrawingActive = false;
+    let circleHandler;
+
+    function toggleCircleMode() {
+      const btn = document.getElementById('toggleCircle');
+
+      if (!circleDrawingActive) {
+        circleHandler = new L.Draw.Circle(map, drawControl.options.draw.circle);
+        circleHandler.enable();
+        btn.textContent = '🛑 Stop Drawing';
+        circleDrawingActive = true;
+
+        // After a circle is drawn, re-enable drawing if toggle is still active
+        map.once(L.Draw.Event.CREATED, function () {
+          if (circleDrawingActive) {
+            toggleCircleMode();  // turn off
+            toggleCircleMode();  // turn on again
+          }
+        });
+
+      } else {
+        if (circleHandler) circleHandler.disable();
+        btn.textContent = '🔵 Draw Circles';
+        circleDrawingActive = false;
+      }
+    }
+
+    renderTankPanel();
+  </script>
+</body>
+</html>
+<!-- what lang lang -->
