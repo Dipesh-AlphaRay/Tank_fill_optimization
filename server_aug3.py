@@ -1,9 +1,13 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 from fill_level_calculator import compute_MinFill_cone
 from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)  # enable cross-origin for frontend JS
+
+@app.route('/')
+def home():
+    return render_template('new.html')  # Serves new.html from /templates
 
 @app.route('/api/calculate', methods=['POST'])
 def calculate():
