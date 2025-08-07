@@ -124,37 +124,37 @@
       });
       html += '</table>';
       document.getElementById('tankTable').innerHTML = html;
-      updateConnectivityTable();
+      // updateConnectivityTable();
     }
 
-    function updateConnectivityTable() {
-      appState.connectivityMatrix = [];
-      let html = '<h3>Tank Connectivity Table</h3>';
-      if (appState.tanks.length === 0) {
-        html += '<p>No tanks available.</p>';
-      } else {
-        html += '<table><tr><th></th>';
-        appState.tanks.forEach((t, colIdx) => { html += `<th>Tank ${t.id}</th>`; });
-        html += '</tr>';
-        appState.tanks.forEach((tRow, rowIdx) => {
-          html += `<tr><th>Tank ${tRow.id}</th>`;
-          let row = [];
-          appState.tanks.forEach((tCol, colIdx) => {
-            html += `<td contenteditable oninput="updateMatrix(${rowIdx}, ${colIdx}, this.innerText)"></td>`;
-            row.push("");
-          });
-          appState.connectivityMatrix.push(row);
-          html += '</tr>';
-        });
-        html += '</table>';
-      }
-      document.getElementById('connectivityTable').innerHTML = html;
-    }
+    // function updateConnectivityTable() {
+    //   appState.connectivityMatrix = [];
+    //   let html = '<h3>Tank Connectivity Table</h3>';
+    //   if (appState.tanks.length === 0) {
+    //     html += '<p>No tanks available.</p>';
+    //   } else {
+    //     html += '<table><tr><th></th>';
+    //     appState.tanks.forEach((t, colIdx) => { html += `<th>Tank ${t.id}</th>`; });
+    //     html += '</tr>';
+    //     appState.tanks.forEach((tRow, rowIdx) => {
+    //       html += `<tr><th>Tank ${tRow.id}</th>`;
+    //       let row = [];
+    //       appState.tanks.forEach((tCol, colIdx) => {
+    //         html += `<td contenteditable oninput="updateMatrix(${rowIdx}, ${colIdx}, this.innerText)"></td>`;
+    //         row.push("");
+    //       });
+    //       appState.connectivityMatrix.push(row);
+    //       html += '</tr>';
+    //     });
+    //     html += '</table>';
+    //   }
+    //   document.getElementById('connectivityTable').innerHTML = html;
+    // }
 
-    function updateMatrix(i, j, value) {
-      if (!appState.connectivityMatrix[i]) appState.connectivityMatrix[i] = [];
-      appState.connectivityMatrix[i][j] = value;
-    }
+    // function updateMatrix(i, j, value) {
+    //   if (!appState.connectivityMatrix[i]) appState.connectivityMatrix[i] = [];
+    //   appState.connectivityMatrix[i][j] = value;
+    // }
 
     function deleteTank(index) {
       const { lat, lng } = appState.tanks[index];
@@ -186,7 +186,7 @@
 
     let appState = {
       tanks: [],
-      connectivityMatrix: [],
+      // connectivityMatrix: [],
       floodData: { floodHeight: '', waveVelocity: '', timePeriod: '', waveHeight: '', windSpeed: '' },
       outputResult: null
     };
@@ -204,23 +204,30 @@
       updateTankTable();
     }
 
-    function updateMatrix(i, j, value) {
-  if (!appState.connectivityMatrix[i]) appState.connectivityMatrix[i] = [];
-  appState.connectivityMatrix[i][j] = value;
-}
+    // function updateMatrix(i, j, value) {
+    //   if (!appState.connectivityMatrix[i]) appState.connectivityMatrix[i] = [];
+    //   appState.connectivityMatrix[i][j] = value;
+    // }
 
 
     function renderFloodPanel() {
       const f = appState.floodData;
       document.getElementById("sidePanel").innerHTML = `
         <h3>Environmental Loading Inputs</h3>
+        <p>
+          You can get the strom hazard data form 
+          <a href="https://cera.coastalrisk.live/" target="_blank" rel="noopener noreferrer">
+            https://cera.coastalrisk.live/  
+          </a>
+          or any other trused sources.
+        </p>
         <table>
           <tr><th>Parameter</th><th>Value</th></tr>
           <tr><td>Flood Height (m)</td><td contenteditable oninput="appState.floodData.floodHeight=this.innerText">${f.floodHeight}</td></tr>
           <tr><td>Wave Velocity (m/s)</td><td contenteditable oninput="appState.floodData.waveVelocity=this.innerText">${f.waveVelocity}</td></tr>
           <tr><td>Time Period (s)</td><td contenteditable oninput="appState.floodData.timePeriod=this.innerText">${f.timePeriod}</td></tr>
           <tr><td>Significant Wave Height (m)</td><td contenteditable oninput="appState.floodData.waveHeight=this.innerText">${f.waveHeight}</td></tr>
-          <tr><td>Wind Speed (m/s)</td><td contenteditable oninput="appState.floodData.windSpeed=this.innerText">${f.windSpeed}</td></tr>
+          <tr><td>Wind Speed (mph)</td><td contenteditable oninput="appState.floodData.windSpeed=this.innerText">${f.windSpeed}</td></tr>
         </table>
         <div style="margin-top: 30px; text-align: center;">
           <button onclick="renderTankPanel()">⬅️ Back</button>
@@ -358,4 +365,4 @@
   </script>
 </body>
 </html>
-<!-- what lang lang -->
+
