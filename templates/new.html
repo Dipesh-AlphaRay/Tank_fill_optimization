@@ -21,7 +21,7 @@
   <div id="map"></div>
 
   <!-- editted line -->
-  <button id="toggleCircle" onclick="toggleCircleMode()" style="position: absolute; top: 10px; left: 10px; z-index: 1000; padding: 8px 14px;">🔵 Draw Circles</button>
+  <button id="toggleCircle" onclick="toggleCircleMode()" style="position: absolute; top: 10px; left: 50px; z-index: 1000; padding: 8px 14px;">🔵 Draw Circles</button>
 
   <div id="sidePanel"></div>
 
@@ -111,7 +111,7 @@
     });
 
     function updateTankTable() {
-      let html = '<table><tr><th>Tank #</th><th>Diameter</th><th>Height</th><th>Sp_Gravity</th><th>Fill Level</th><th>Delete</th></tr>';
+      let html = '<table><tr><th>Tank #</th><th>Diameter (m)</th><th>Height (m)</th><th>Sp_Gravity</th><th>Fill Level (m)</th><th>Delete</th></tr>';
       appState.tanks.forEach((t, i) => {
         html += `<tr>
           <td>${t.id}</td>
@@ -300,11 +300,11 @@
         result.results.forEach((r) => {
           doc.text(`Tank ${r["Tank ID"]}:`, 20, yOffset);
           yOffset += 7;
-          doc.text(`Min Fill (Sliding): ${r["Min. fill required to prevent sliding failure"].toFixed(3)} ft`, 25, yOffset);
+          doc.text(`Min Fill (Sliding): ${r["Min. fill required to prevent sliding failure"].toFixed(3)} meters`, 25, yOffset);
           yOffset += 7;
-          doc.text(`Min Fill (Floatation): ${r["Min. fill required to prevent floatation failure"].toFixed(3)} ft`, 25, yOffset);
+          doc.text(`Min Fill (Floatation): ${r["Min. fill required to prevent floatation failure"].toFixed(3)} meters`, 25, yOffset);
           yOffset += 7;
-          doc.text(`Min Fill (Overturning): ${r["Min. fill required to prevent overturning failure"].toFixed(3)} ft`, 25, yOffset);
+          doc.text(`Min Fill (Overturning): ${r["Min. fill required to prevent overturning failure"].toFixed(3)} meters`, 25, yOffset);
           yOffset += 10; // extra space between tanks
         });
 
