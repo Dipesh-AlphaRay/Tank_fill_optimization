@@ -280,9 +280,9 @@
         // Environmental Inputs
         doc.text("Environmental Inputs:", 20, yOffset);
         yOffset += 7;
-        doc.text(`Wind Speed (V): ${appState.floodData.windSpeed} m/s`, 20, yOffset);
+        doc.text(`Wind Speed (V): ${appState.floodData.windSpeed} mph`, 20, yOffset);
         yOffset += 7;
-        doc.text(`Flood Height (h_f): ${appState.floodData.floodHeight} m`, 20, yOffset);
+        doc.text(`Flood Height (h_f): ${appState.floodData.floodHeight} Meter`, 20, yOffset);
         yOffset += 7;
         doc.text(`Wave Velocity: ${appState.floodData.waveVelocity} m/s`, 20, yOffset);
         yOffset += 7;
@@ -300,11 +300,11 @@
         result.results.forEach((r) => {
           doc.text(`Tank ${r["Tank ID"]}:`, 20, yOffset);
           yOffset += 7;
-          doc.text(`Min Fill (Sliding): ${r["Min. fill required to prevent sliding failure"].toFixed(3)} meters`, 25, yOffset);
+          doc.text(`Min Fill (Sliding): ${r["Min. fill required to prevent sliding failure"].toFixed(3)} Meters`, 25, yOffset);
           yOffset += 7;
-          doc.text(`Min Fill (Floatation): ${r["Min. fill required to prevent floatation failure"].toFixed(3)} meters`, 25, yOffset);
+          doc.text(`Min Fill (Floatation): ${r["Min. fill required to prevent floatation failure"].toFixed(3)} Meters`, 25, yOffset);
           yOffset += 7;
-          doc.text(`Min Fill (Overturning): ${r["Min. fill required to prevent overturning failure"].toFixed(3)} meters`, 25, yOffset);
+          doc.text(`Min Fill (Overturning): ${r["Min. fill required to prevent overturning failure"].toFixed(3)} Meters`, 25, yOffset);
           yOffset += 10; // extra space between tanks
         });
 
