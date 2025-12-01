@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Tank Facility Mapper</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <style>
+    body { display: flex; margin: 0; }
+    #map { width: 70vw; height: 100vh; }
+    #sidePanel { width: 30vw; padding: 10px; background: #f4f4f4; overflow-y: auto; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid #999; padding: 6px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <!-- editted line -->
+  <button id="toggleCircle" onclick="toggleCircleMode()" style="position: absolute; top: 10px; left: 50px; z-index: 1000; padding: 8px 14px;">🔵 Draw Circles</button>
+
+  <div id="sidePanel"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+  <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+<script>
+  var map = L.map('map').setView([29.76, -95.36], 17);
+  L.tileLayer('https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
+    maxZoom: 20,
+    subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
+  }).addTo(map);
+
+  L.Control.geocoder({ defaultMarkGeocode: true }).addTo(map);
+
+  var drawnItems = new L.FeatureGroup();
+  map.addLayer(drawnItems);
+
+  var drawControl = new L.Control.Draw({
+    draw: {
+      polygon: { allowIntersection: false, showArea: true },
+      polyline: false,
+      rectangle: false,
+      circle: { shapeOptions: { color: 'red' } },
+      marker: true,
+      circlemarker: false
+    },
+    edit: { featureGroup: drawnItems, remove: true }
+  });
+  map.addControl(drawControl);
+
+  var currentPolygon = null;
+  var tankCounter = 1;
+
+  // -------------------------------
+  // GLOBAL APP STATE (UPDATED)
+  // -------------------------------
+  let appState = {
+    tanks: [],
+    connectivityMatrix: [],  // NEW: adjacency matrix
+    floodData: {
+      floodHeight: '',
+      waterVelocity: '',
+      timePeriod: '',
+      waveHeight: '',
+      windSpeed: '',
+
+      pipeCapacity: '',
+      timeWindow: ''
+    },
+    outputResult: null
+  };
+
+  // -------------------------------
+  // POINT-IN-POLYGON HELPER
+  // -------------------------------
+  var leafletPip = {
+    pointInLayer: function(point, layer) {
+      var poly = layer.toGeoJSON();
+      var inside = false;
+      var x = point[0], y = point[1];
+      poly.geometry.coordinates[0].forEach(function(p, i, arr) {
+        var xi = p[0], yi = p[1];
+        var xj = arr[(i + 1) % arr.length][0], yj = arr[(i + 1) % arr.length][1];
+        var intersect = ((yi > y) !== (yj > y)) &&
+                        (x < (xj - xi) * (y - yi) / ((yj - yi) + 0.00001) + xi);
+        if (intersect) inside = !inside;
+      });
+      return inside ? [layer] : [];
+    }
+  };
+
+  // -------------------------------
+  // MAP DRAWING EVENTS
+  // -------------------------------
+  map.on(L.Draw.Event.CREATED, function (event) {
+    var layer = event.layer;
+
+    if (event.layerType === 'polygon') {
+      // New facility boundary – reset everything
+      drawnItems.clearLayers();
+      drawnItems.addLayer(layer);
+      currentPolygon = layer;
+
+      appState.tanks = [];
+      appState.connectivityMatrix = [];   // reset adjacency matrix
+      tankCounter = 1;
+      updateTankTable();
+
+    } else if ((event.layerType === 'circle' || event.layerType === 'marker')) {
+      var latlng = layer.getLatLng();
+
+      if (!currentPolygon || leafletPip.pointInLayer([latlng.lng, latlng.lat], currentPolygon).length > 0) {
+        drawnItems.addLayer(layer);
+
+        var diameter = event.layerType === 'circle'
+          ? (2 * layer.getRadius()).toFixed(2)
+          : '';
+
+        var label = L.marker(latlng, {
+          icon: L.divIcon({
+            className: 'tank-label',
+            html: `<b style='color:white;background:#0078A8;padding:4px;border-radius:4px;'>Tank ${tankCounter}</b>`
+          })
+        }).addTo(map);
+
+        layer._label = label;
+        layer._latlng = latlng;
+
+        appState.tanks.push({
+          id: tankCounter,
+          diameter: diameter,
+          height: '',
+          density: '',
+          fill: '',
+          lat: latlng.lat,
+          lng: latlng.lng
+        });
+
+        // Grow adjacency matrix for new tank
+        expandConnectivityMatrixForNewTank();
+
+        tankCounter++;
+        updateTankTable();
+
+        // Keep drawing mode active for circles
+        if (event.layerType === 'circle') {
+          drawControl._toolbars.draw._modes.circle.handler.enable();
+        }
+      }
+    }
+  });
+
+  // When shapes are deleted
+  map.on('draw:deleted', function (e) {
+    let removedLatLngs = [];
+
+    e.layers.eachLayer(function(layer) {
+      if (layer._latlng) {
+        removedLatLngs.push(layer._latlng);
+      }
+      if (layer._label) map.removeLayer(layer._label);
+      drawnItems.removeLayer(layer);
+    });
+
+    if (removedLatLngs.length > 0) {
+      // Preserve connectivity among remaining tanks
+      const oldTanks = appState.tanks;
+      const oldMatrix = appState.connectivityMatrix || [];
+      const keptTanks = [];
+      const keptIndices = [];
+
+      oldTanks.forEach((t, idx) => {
+        const isRemoved = removedLatLngs.some(ll => ll.lat === t.lat && ll.lng === t.lng);
+        if (!isRemoved) {
+          keptTanks.push(t);
+          keptIndices.push(idx);
+        }
+      });
+
+      const newMatrix = keptIndices.map(i =>
+        keptIndices.map(j => (oldMatrix[i] && oldMatrix[i][j] !== undefined) ? oldMatrix[i][j] : 0)
+      );
+
+      appState.tanks = keptTanks;
+      appState.connectivityMatrix = newMatrix;
+    }
+
+    tankCounter = appState.tanks.length + 1;
+    updateTankTable();
+  });
+
+  // -------------------------------
+  // CONNECTIVITY MATRIX HELPERS
+  // -------------------------------
+  function expandConnectivityMatrixForNewTank() {
+    const n = appState.tanks.length; // new size
+    if (!appState.connectivityMatrix || appState.connectivityMatrix.length === 0) {
+      // first tank
+      appState.connectivityMatrix = [[0]];
+      return;
+    }
+
+    // Add a column to each existing row
+    appState.connectivityMatrix.forEach(row => row.push(0));
+
+    // Add a new row of zeros
+    const newRow = new Array(n).fill(0);
+    appState.connectivityMatrix.push(newRow);
+  }
+
+  function deleteTankAndUpdateMatrix(index) {
+    // Remove tank
+    appState.tanks.splice(index, 1);
+
+    // Remove row from matrix
+    if (appState.connectivityMatrix && appState.connectivityMatrix.length > index) {
+      appState.connectivityMatrix.splice(index, 1);
+      // Remove corresponding column
+      appState.connectivityMatrix.forEach(row => {
+        if (row.length > index) row.splice(index, 1);
+      });
+    }
+
+    tankCounter = appState.tanks.length + 1;
+    updateTankTable();
+  }
+
+  // -------------------------------
+  // TANK TABLE + CONNECTIVITY TABLE
+  // -------------------------------
+  function updateTankTable() {
+    let html = '<table><tr><th>Tank #</th><th>Diameter (m)</th><th>Height (m)</th><th>Sp_Gravity</th><th>Fill Level (m)</th><th>Delete</th></tr>';
+
+    appState.tanks.forEach((t, i) => {
+      html += `<tr>
+        <td>${t.id}</td>
+        <td contenteditable oninput="appState.tanks[${i}].diameter=this.innerText">${t.diameter}</td>
+        <td contenteditable oninput="appState.tanks[${i}].height=this.innerText">${t.height}</td>
+        <td contenteditable oninput="appState.tanks[${i}].density=this.innerText">${t.density}</td>
+        <td contenteditable oninput="appState.tanks[${i}].fill=this.innerText">${t.fill}</td>
+        <td><button onclick="deleteTank(${i})">Delete</button></td>
+      </tr>`;
+    });
+    html += '</table>';
+
+    document.getElementById('tankTable').innerHTML = html;
+
+    // After updating tank table, redraw connectivity matrix
+    updateConnectivityTable();
+  }
+
+  // NEW: Render adjacency matrix
+  function updateConnectivityTable() {
+    const n = appState.tanks.length;
+    let html = '';
+
+    // Make sure matrix has correct dimensions
+    const oldMat = appState.connectivityMatrix || [];
+    const newMat = [];
+
+    for (let i = 0; i < n; i++) {
+      newMat[i] = [];
+      for (let j = 0; j < n; j++) {
+        if (oldMat[i] && typeof oldMat[i][j] !== 'undefined') {
+          newMat[i][j] = oldMat[i][j];
+        } else {
+          newMat[i][j] = 0;
+        }
+      }
+    }
+    appState.connectivityMatrix = newMat;
+
+    if (n === 0) {
+      html = '<p>No tanks available. Draw tanks on the map to edit connectivity.</p>';
+    } else {
+      html = '<table><tr><th></th>';
+      appState.tanks.forEach(t => { html += `<th>Tank ${t.id}</th>`; });
+      html += '</tr>';
+
+      for (let i = 0; i < n; i++) {
+        html += `<tr><th>Tank ${appState.tanks[i].id}</th>`;
+        for (let j = 0; j < n; j++) {
+          const val = appState.connectivityMatrix[i][j] || 0;
+          html += `<td contenteditable oninput="updateMatrix(${i}, ${j}, this.innerText)">${val}</td>`;
+        }
+        html += '</tr>';
+      }
+      html += '</table>';
+    }
+
+    document.getElementById('connectivityTable').innerHTML = html;
+  }
+
+  // NEW: called from contenteditable cells
+  function updateMatrix(i, j, value) {
+    if (!appState.connectivityMatrix[i]) appState.connectivityMatrix[i] = [];
+    const v = parseInt(value);
+    appState.connectivityMatrix[i][j] = isNaN(v) ? 0 : v;
+  }
+
+  // Called by "Delete" button in tank table
+  function deleteTank(index) {
+    const { lat, lng } = appState.tanks[index];
+
+    drawnItems.eachLayer(layer => {
+      if (layer._latlng?.lat === lat && layer._latlng?.lng === lng) {
+        if (layer._label) map.removeLayer(layer._label);
+        drawnItems.removeLayer(layer);
+      }
+    });
+
+    deleteTankAndUpdateMatrix(index);
+  }
+
+  // -------------------------------
+  // SIDE PANEL RENDERING
+  // -------------------------------
+  function renderTankPanel() {
+    const panel = document.getElementById("sidePanel");
+    panel.innerHTML = `
+      <h3>Tank Table</h3>
+      <div id="tankTable"></div>
+
+      <h3 style="margin-top:20px;">Tank Connectivity (Adjacency Matrix)</h3>
+      <p style="font-size:0.9em;color:#555;">
+        Enter 1 if a pipe connects two tanks, 0 otherwise. Diagonal cells (Tank i to Tank i) can be left as 0.
+      </p>
+      <div id="connectivityTable"></div>
+
+      <div style="margin-top: 30px; text-align: center;">
+        <button onclick="renderFloodPanel()" style="padding: 10px 20px;">Next ➡️</button>
+      </div>
+    `;
+    updateTankTable();
+  }
+
+  function renderFloodPanel() {
+    const f = appState.floodData;
+    document.getElementById("sidePanel").innerHTML = `
+      <h3>Environmental Loadings and Pipe Characteristics</h3>
+      <p>
+        You can get the strom hazard data form 
+        <a href="https://cera.coastalrisk.live/" target="_blank" rel="noopener noreferrer">
+          https://cera.coastalrisk.live/  
+        </a>
+        or any other trused sources.
+      </p>
+      <table>
+        <tr><th>Parameter</th><th>Value</th></tr>
+        <tr><td>Flood Depth (m)</td><td contenteditable oninput="appState.floodData.floodHeight=this.innerText">${f.floodHeight}</td></tr>
+        <tr><td>Water Velocity (m/s)</td><td contenteditable oninput="appState.floodData.waterVelocity=this.innerText">${f.waterVelocity}</td></tr>
+        <tr><td>Time Period (s)</td><td contenteditable oninput="appState.floodData.timePeriod=this.innerText">${f.timePeriod}</td></tr>
+        <tr><td>Significant Wave Height (m)</td><td contenteditable oninput="appState.floodData.waveHeight=this.innerText">${f.waveHeight}</td></tr>
+        <tr><td>Wind Speed (mph)</td><td contenteditable oninput="appState.floodData.windSpeed=this.innerText">${f.windSpeed}</td></tr>
+
+        <tr><td>Pipe Capacity (CMS)</td><td contenteditable oninput="appState.floodData.pipeCapacity=this.innerText">${f.pipeCapacity}</td></tr>
+        <tr><td>Time Window (hr) </td><td contenteditable oninput="appState.floodData.timeWindow=this.innerText">${f.timeWindow}</td></tr>
+      </table>
+      <div style="margin-top: 30px; text-align: center;">
+        <button onclick="renderTankPanel()">⬅️ Back</button>
+        <button onclick="submitAndGeneratePDF()" style="margin-left: 10px;">Submit</button>
+      </div>
+    `;
+  }
+
+  // -------------------------------
+  // SUBMIT + PDF GENERATION
+  // -------------------------------
+  async function submitAndGeneratePDF() {
+  // 1. Tanks: read from appState
+  const tanks = appState.tanks.map(t => ({
+    id: t.id,
+    diameter_m: parseFloat(t.diameter),        // from Table 1
+    height_m: parseFloat(t.height),            // from Table 1
+    specific_gravity: parseFloat(t.density),   // from Table 1
+    fill_level_m: parseFloat(t.fill)           // from Table 1
+  })).filter(t =>
+    !isNaN(t.diameter_m) &&
+    !isNaN(t.height_m) &&
+    !isNaN(t.specific_gravity) &&
+    !isNaN(t.fill_level_m)
+  );
+
+  // 2. Environment inputs
+  const windSpeed = parseFloat(appState.floodData.windSpeed);
+  const floodHeight = parseFloat(appState.floodData.floodHeight);
+  const waterVelocity = parseFloat(appState.floodData.waterVelocity);
+  const waveHeight = parseFloat(appState.floodData.waveHeight);
+  const timePeriod = parseFloat(appState.floodData.timePeriod);
+
+  const pipeCapacity = parseFloat(appState.floodData.pipeCapacity);
+  const timeWindow = parseFloat(appState.floodData.timeWindow);
+
+  // 3. Adjacency matrix from Table 2
+  const adjacency = appState.connectivityMatrix || [];
+
+  // 4. Payload to backend
+  const payload = {
+    tanks: tanks,
+    adjacency: adjacency,
+    environment: {
+      "Wind Speed (m/s)": windSpeed,
+      "Flood Depth (m)": floodHeight,
+      "Water Velocity (m/s)": waterVelocity,
+      "Wave Height (m)": waveHeight,
+      "Time Period (s)": timePeriod,
+
+      "Pipe Capacity (CMS)": pipeCapacity,
+      "Time Window (hr)": timeWindow
+    }
+  };
+
+  try {
+    const response = await fetch('https://tank-fill-optimization.onrender.com/api/calculate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const result = await response.json();
+    if (result.error) throw new Error(result.error);
+
+    console.log("API result keys:", Object.keys(result));
+    console.log("fill_bar_plot length:",
+                result.fill_bar_plot_png_base64 ? result.fill_bar_plot_png_base64.length : "MISSING");
+    console.log("network_flow_plot length:",
+                result.network_flow_plot_png_base64 ? result.network_flow_plot_png_base64.length : "MISSING");
+
+
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    doc.setFontSize(14);
+    doc.text("Tank Facility Analysis Report", 20, 20);
+
+    let yOffset = 30;
+    doc.setFontSize(12);
+
+    // --- Environmental Inputs ---
+    doc.text("Environmental Inputs:", 20, yOffset);
+    yOffset += 7;
+    doc.text(`Wind Speed (V): ${appState.floodData.windSpeed} mph`, 20, yOffset);
+    yOffset += 7;
+    doc.text(`Flood Height (h_f): ${appState.floodData.floodHeight} m`, 20, yOffset);
+    yOffset += 7;
+    doc.text(`Water Velocity: ${appState.floodData.waterVelocity} m/s`, 20, yOffset);
+    yOffset += 7;
+    doc.text(`Wave Height: ${appState.floodData.waveHeight} m`, 20, yOffset);
+    yOffset += 7;
+    doc.text(`Time Period: ${appState.floodData.timePeriod} s`, 20, yOffset);
+
+    yOffset += 7;
+    doc.text(`Pipe Capacity: ${appState.floodData.pipeCapacity} CMS`, 20, yOffset);
+    yOffset += 7;
+    doc.text(`Time Window: ${appState.floodData.timeWindow} Hour(s)`, 20, yOffset);
+
+    yOffset += 10;
+
+    // --- Tank Inputs ---
+    doc.text("Tank Inputs (from Table 1):", 20, yOffset);
+    yOffset += 7;
+    result.tanks.forEach(t => {
+      doc.text(
+        `Tank ${t.id}: D=${t.diameter_m.toFixed(2)} m, H=${t.height_m.toFixed(2)} m, SG=${t.specific_gravity.toFixed(3)}, Fill=${t.fill_level_m.toFixed(2)} m`,
+        20,
+        yOffset
+      );
+      yOffset += 6;
+      if (yOffset > 270) { doc.addPage(); yOffset = 20; }
+    });
+
+    yOffset += 8;
+
+    // --- Adjacency Matrix summary ---
+    doc.text("Adjacency Matrix (Table 2):", 20, yOffset);
+    yOffset += 7;
+    doc.setFontSize(10);
+    const n = result.adjacency.length;
+    for (let i = 0; i < n; i++) {
+      const row = result.adjacency[i].join(" ");
+      doc.text(row, 20, yOffset);
+      yOffset += 5;
+      if (yOffset > 270) { doc.addPage(); yOffset = 20; }
+    }
+    doc.setFontSize(12);
+
+    yOffset += 8;
+        // --- Damage Cost Summary ---
+    yOffset += 10;
+    doc.setFontSize(12);
+    doc.text("Damage Cost Summary:", 20, yOffset);
+    yOffset += 8;
+
+    doc.setFontSize(11);
+    doc.text(`Original Damage Cost: $${result.original_cost.toExponential(4)}`, 25, yOffset);
+    yOffset += 6;
+    doc.text(`Unconstrained Optimum Cost: $${result.unconstrained_cost.toExponential(4)}`, 25, yOffset);
+    yOffset += 6;
+    doc.text(`Time-Feasible Optimum Cost: $${result.time_feasible_cost.toExponential(4)}`, 25, yOffset);
+    yOffset += 10;
+
+
+    // // --- Fill Level Comparison Table ---
+    // doc.setFontSize(12);
+    // doc.text("Fill Level Comparison:", 20, yOffset);
+    // yOffset += 8;
+
+    // doc.setFontSize(10);
+    // doc.text("Tank   Initial Fill   Unconstrained Fill   Time-Feasible Fill", 20, yOffset);
+    // yOffset += 5;
+    // doc.setFontSize(9);
+
+    // // SAFE GUARD: ensure backend values exist
+    // if (Array.isArray(result.fill_initial) &&
+    //     Array.isArray(result.fill_unconstrained_opt) &&
+    //     Array.isArray(result.fill_time_feasible_opt)) {
+
+    //   for (let i = 0; i < result.fill_initial.length; i++) {
+
+    //     const tnum = result.tanks[i].id;
+    //     const f0 = Number(result.fill_initial[i]).toFixed(3);
+    //     const f1 = Number(result.fill_unconstrained_opt[i]).toFixed(3);
+    //     const f2 = Number(result.fill_time_feasible_opt[i]).toFixed(3);
+
+    //     const row = `${String(tnum).padEnd(5)}  ${f0.padEnd(12)}  ${f1.padEnd(16)}  ${f2}`;
+    //     doc.text(row, 20, yOffset);
+    //     yOffset += 5;
+
+    //     if (yOffset > 270) {
+    //       doc.addPage();
+    //       yOffset = 20;
+    //     }
+    //   }
+
+    // } else {
+    //   console.warn("Missing fill-level arrays in result:", result);
+    // }
+
+    // doc.setFontSize(12);
+    // yOffset += 10;
+    // --- Fill Level Comparison (all tanks, simple rows) ---
+    doc.setFontSize(12);
+    doc.text("Fill Level Comparison:", 20, yOffset);
+    yOffset += 8;
+
+    doc.setFontSize(10);
+    doc.text("Tank : Initial, Unconstrained, Time-Feasible (m)", 20, yOffset);
+    yOffset += 6;
+
+    doc.setFontSize(9);
+
+    // make sure arrays exist
+    if (Array.isArray(result.fill_initial) &&
+        Array.isArray(result.fill_unconstrained_opt) &&
+        Array.isArray(result.fill_time_feasible_opt)) {
+
+      for (let i = 0; i < result.fill_initial.length; i++) {
+        const tnum = result.tanks[i].id;
+        const f0 = Number(result.fill_initial[i]).toFixed(3);
+        const f1 = Number(result.fill_unconstrained_opt[i]).toFixed(3);
+        const f2 = Number(result.fill_time_feasible_opt[i]).toFixed(3);
+
+        // one line per tank
+        doc.text(`Tank ${tnum}: ${f0}, ${f1}, ${f2}`, 20, yOffset);
+        yOffset += 5;
+
+        // simple page break handling
+        if (yOffset > 270) {
+          doc.addPage();
+          yOffset = 20;
+        }
+      }
+    } else {
+      console.warn("Missing fill-level arrays in result:", result);
+    }
+
+    doc.setFontSize(12);
+    yOffset += 10;
+
+
+
+    // --- Network Plot Image ---
+    // if (result.plot_png_base64) {
+    //   const imgData = "data:image/png;base64," + result.plot_png_base64;
+    //   if (yOffset > 200) { doc.addPage(); yOffset = 20; }
+    //   doc.text("Tank Network Graph:", 20, yOffset);
+    //   yOffset += 5;
+    //   doc.addImage(imgData, 'PNG', 20, yOffset, 160, 90);
+    //   yOffset += 95;
+    // }
+
+     // --- Plot 1: Fill Levels (Initial vs Optimized) ---
+    try {
+      if (result.fill_bar_plot_png_base64 && result.fill_bar_plot_png_base64.length > 1000) {
+        const imgData1 = "data:image/png;base64," + result.fill_bar_plot_png_base64;
+        console.log("Embedding fill plot, length:", result.fill_bar_plot_png_base64.length);
+
+        if (yOffset > 180) { doc.addPage(); yOffset = 20; }
+        doc.text("Fill Levels: Initial vs Time-Feasible Optimized", 20, yOffset);
+        yOffset += 5;
+
+        // width: 170, height: auto (0)
+        doc.addImage(imgData1, 'PNG', 20, yOffset, 170, 0);
+        yOffset += 90;
+      } else {
+        console.warn("No valid fill_bar_plot_png_base64 in result.");
+      }
+    } catch (e) {
+      console.error("Error adding fill-level image to PDF:", e);
+    }
+    yOffset += 40;
+    // --- Plot 2: Network Flow Graph ---
+    try {
+      if (result.network_flow_plot_png_base64 && result.network_flow_plot_png_base64.length > 1000) {
+        const imgData2 = "data:image/png;base64," + result.network_flow_plot_png_base64;
+        console.log("Embedding network plot, length:", result.network_flow_plot_png_base64.length);
+
+        if (yOffset > 180) { doc.addPage(); yOffset = 20; }
+        doc.text("Network Flow (edge width ∝ flow volume)", 20, yOffset);
+        yOffset += 5;
+
+        doc.addImage(imgData2, 'PNG', 20, yOffset, 170, 0);
+        yOffset += 90;
+      } else {
+        console.warn("No valid network_flow_plot_png_base64 in result.");
+      }
+    } catch (e) {
+      console.error("Error adding network-flow image to PDF:", e);
+    }
+
+
+    // const pdfDataUrl = doc.output('dataurlstring');
+    // renderPDFPanel(pdfDataUrl);
+    // Create a Blob URL instead of a data: URL
+    const pdfBlobUrl = doc.output('bloburl');
+    renderPDFPanel(pdfBlobUrl);
+
+
+  } catch (err) {
+    alert("Error communicating with backend: " + err.message);
+    console.error(err);
+  }
+}
+
+
+  function renderPDFPanel(pdfDataUrl) {
+    document.getElementById("sidePanel").innerHTML = `
+      <h3>📄 PDF Output</h3>
+      <iframe src="${pdfDataUrl}" width="100%" height="500px"></iframe>
+      <div style="margin-top: 20px; text-align:center;">
+        <a href="${pdfDataUrl}" download="report.pdf">
+          <button style="padding: 10px 20px;">Download PDF</button>
+        </a>
+      </div>
+      <div style="margin-top: 20px; text-align: center;">
+        <button onclick="renderTankPanel()">🔁 Back to Tanks</button>
+        <button onclick="renderFloodPanel()" style="margin-left: 10px;">🌊 Edit Flood Data</button>
+      </div>
+    `;
+  }
+
+  // -------------------------------
+  // CIRCLE DRAW TOGGLE
+  // -------------------------------
+  let circleDrawingActive = false;
+  let circleHandler;
+
+  function toggleCircleMode() {
+    const btn = document.getElementById('toggleCircle');
+
+    if (!circleDrawingActive) {
+      circleHandler = new L.Draw.Circle(map, drawControl.options.draw.circle);
+      circleHandler.enable();
+      btn.textContent = '🛑 Stop Drawing';
+      circleDrawingActive = true;
+
+      map.once(L.Draw.Event.CREATED, function () {
+        if (circleDrawingActive) {
+          toggleCircleMode();  // off
+          toggleCircleMode();  // on again
+        }
+      });
+
+    } else {
+      if (circleHandler) circleHandler.disable();
+      btn.textContent = '🔵 Draw Circles';
+      circleDrawingActive = false;
+    }
+  }
+
+  // Initial render
+  renderTankPanel();
+</script>

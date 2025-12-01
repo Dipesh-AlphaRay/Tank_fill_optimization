@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify, render_template
-from fill_level_calculator import compute_MinFill_cone
+from inputs_tank_plot import run_tank_network_analysis   # NEW
 from flask_cors import CORS
 
 app = Flask(__name__)
@@ -7,28 +7,24 @@ CORS(app)  # enable cross-origin for frontend JS
 
 @app.route('/')
 def home():
-    return render_template('new.html')  # Serves new.html from /templates
+    return render_template('test_fill_optmizn.html')  # Serves new.html from /templates
 
 @app.route('/api/calculate', methods=['POST'])
 def calculate():
     try:
-        data = request.json  # expects {"tanks": [{D, h_f, G}], "V": 120}
+        data = request.json  # expects {"tanks": [...], "adjacency": [...], "environment": {...}}
         tanks = data.get('tanks', [])
-        env = data.get("environment", {})
+        adjacency = data.get('adjacency', [])
+        environment = data.get('environment', {})
 
-        # Dynamically extract V and h_f
-        V = env.get("Wind Speed (m/s)", 120)  # fallback to 120 if not provided
-        h_f = env.get("Flood Height (m)", 10) # fallback to 10 if not provided
+        # Run your network calculator
+        result = run_tank_network_analysis(tanks, adjacency, environment)
 
-        results = []
-        for t in tanks:
-            res = compute_MinFill_cone(V=V, D=t["diameter"], h_f=h_f, G=t["density"])
-            res["Tank ID"] = t.get("id", "N/A")
-            results.append(res)
+        # result will already contain tanks, adjacency, plot, etc.
+        return jsonify(result)
 
-        return jsonify({"results": results})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, use_reloader=False)
